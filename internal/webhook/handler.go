@@ -3,6 +3,7 @@ package webhook
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"log"
 	"net/http"
@@ -44,14 +45,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) validateSignature(signature string, payload []byte) bool {
-	if len(signature) < 7 { // "sha256=" prefix is 7 characters
+	if len(signature) < 7 {
 		return false
 	}
-
 	mac := hmac.New(sha256.New, h.secret)
 	mac.Write(payload)
-	expectedSignature := "sha256=" + string(mac.Sum(nil))
-	return hmac.Equal([]byte(signature), []byte(expectedSignature))
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	return hmac.Equal([]byte(expected), []byte(signature))
 }
 
 func (h *Handler) handlePullRequest(w http.ResponseWriter, r *http.Request) {
