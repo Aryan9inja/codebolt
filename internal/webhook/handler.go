@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -38,7 +39,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		w.WriteHeader(http.StatusOK)
 	case "pull_request":
-		h.handlePullRequest(w, r)
+		h.handlePullRequest(w, payload)
 	default:
 		w.WriteHeader(http.StatusOK)
 	}
@@ -55,7 +56,18 @@ func (h *Handler) validateSignature(signature string, payload []byte) bool {
 	return hmac.Equal([]byte(expected), []byte(signature))
 }
 
-func (h *Handler) handlePullRequest(w http.ResponseWriter, r *http.Request) {
-	log.Println("Handling pull request event")
-	w.WriteHeader(http.StatusAccepted)
+func (h *Handler) handlePullRequest(w http.ResponseWriter, payload []byte) {
+	var event PullRequestEvent
+	if err := json.Unmarshal(payload, &event); err != nil {
+		http.Error(w, "failed to parse payload", http.StatusBadRequest)
+		return
+	}
+
+	if event.Action != "opened" && event.Action != "synchronize" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	log.Printf("Pull request #%d in %s/%s: %s", event.PullRequest.Number, event.Repository.Owner.Login, event.Repository.Name, event.PullRequest.Title)
+	w.WriteHeader(http.StatusOK)
 }
