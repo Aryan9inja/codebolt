@@ -8,14 +8,17 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"github.com/Aryan9inja/gotaskq/taskq"
 )
 
 type Handler struct {
 	secret []byte
+	queue  *taskq.Server
 }
 
-func NewHandler(secret string) *Handler {
-	return &Handler{secret: []byte(secret)}
+func NewHandler(secret string, queue *taskq.Server) *Handler {
+	return &Handler{secret: []byte(secret), queue: queue}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +42,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		w.WriteHeader(http.StatusOK)
 	case "pull_request":
-		h.handlePullRequest(w, payload)
+		h.handlePullRequest(w, r, payload)
 	default:
 		w.WriteHeader(http.StatusOK)
 	}
@@ -56,7 +59,7 @@ func (h *Handler) validateSignature(signature string, payload []byte) bool {
 	return hmac.Equal([]byte(expected), []byte(signature))
 }
 
-func (h *Handler) handlePullRequest(w http.ResponseWriter, payload []byte) {
+func (h *Handler) handlePullRequest(w http.ResponseWriter, r *http.Request, payload []byte) {
 	var event PullRequestEvent
 	if err := json.Unmarshal(payload, &event); err != nil {
 		http.Error(w, "failed to parse payload", http.StatusBadRequest)
@@ -68,6 +71,31 @@ func (h *Handler) handlePullRequest(w http.ResponseWriter, payload []byte) {
 		return
 	}
 
-	log.Printf("Pull request #%d in %s/%s: %s", event.PullRequest.Number, event.Repository.Owner.Login, event.Repository.Name, event.PullRequest.Title)
-	w.WriteHeader(http.StatusOK)
+	jobPayload, err := json.Marshal(PRReviewJobPayload{
+		InstallationID: event.Installation.ID,
+		RepoFullName:   event.Repository.FullName,
+		Owner:          event.Repository.Owner.Login,
+		RepoName:       event.Repository.Name,
+		PRNumber:       event.Number,
+		HeadSHA:        event.PullRequest.Head.SHA,
+		BaseSHA:        event.PullRequest.Base.SHA,
+	})
+	if err != nil {
+		http.Error(w, "failed to marshal job payload", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = h.queue.Enqueue(r.Context(), taskq.JobOptions{
+		Type:       "pr-review",
+		Payload:    jobPayload,
+		MaxRetries: 3,
+	})
+	if err != nil {
+		log.Printf("Failed to enqueue job: %v", err)
+		http.Error(w, "failed to enqueue job", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("enqueued PR #%d review job for %s", event.Number, event.Repository.FullName)
+	w.WriteHeader(http.StatusAccepted)
 }
