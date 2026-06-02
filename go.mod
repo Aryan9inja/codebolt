@@ -6,6 +6,7 @@ require github.com/go-chi/chi/v5 v5.3.0
 
 require (
 	github.com/Aryan9inja/gotaskq v1.2.1
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/joho/godotenv v1.5.1
 )
 
