@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/Aryan9inja/codebolt/internal/github"
+	"github.com/Aryan9inja/codebolt/internal/processor"
 	"github.com/Aryan9inja/codebolt/internal/webhook"
 	"github.com/Aryan9inja/gotaskq/taskq"
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,19 @@ func main() {
 		log.Fatal("GITHUB_WEBHOOK_SECRET not set")
 	}
 
+	appID := os.Getenv("GITHUB_APP_ID")
+	if appID == "" {
+		log.Fatal("GITHUB_APP_ID not set")
+	}
+
+	privateKeyPath := os.Getenv("GITHUB_PRIVATE_KEY_PATH")
+	if privateKeyPath == "" {
+		log.Fatal("GITHUB_PRIVATE_KEY_PATH not set")
+	}
+
+	ghClient := github.NewClient(appID, privateKeyPath)
+	proc := processor.NewProcessor(ghClient)
+
 	queue, err := taskq.New(taskq.Options{
 		NumWorkers:       3,
 		DefaultQueueName: "pr-review",
@@ -32,15 +46,7 @@ func main() {
 	}
 
 	// register PR review job handler
-	if err := queue.RegisterFunc("pr-review", func(ctx context.Context, job *taskq.Job) error {
-		var payload webhook.PullRequestEvent
-		if err := json.Unmarshal(job.Payload, &payload); err != nil {
-			return err
-		}
-		log.Printf("Processing PR review job for #%d in %s/%s", payload.PullRequest.Number, payload.Repository.Owner.Login, payload.Repository.Name)
-		// TODO: add actual review logic here
-		return nil
-	}); err != nil {
+	if err := queue.RegisterFunc("pr-review", proc.HandlePRReview); err != nil {
 		log.Fatalf("Failed to register handler: %v", err)
 	}
 
