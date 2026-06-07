@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/Aryan9inja/codebolt/internal/diff"
 	"github.com/Aryan9inja/codebolt/internal/github"
 	"github.com/Aryan9inja/codebolt/internal/webhook"
 	"github.com/Aryan9inja/gotaskq/taskq"
@@ -28,18 +29,24 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 	}
 
 	log.Printf("[processor] PR #%d | repo: %s | head: %.8s", payload.PRNumber, payload.RepoFullName, payload.HeadSHA)
-	
+
 	token, err := p.github.GetInstallationToken(ctx, payload.InstallationID)
 	if err != nil {
 		return fmt.Errorf("failed to get installation token: %w", err)
 	}
 
-	diff, err := p.github.GetPullRequestDiff(ctx, token, payload.Owner, payload.RepoName, payload.PRNumber)
+	prDiff, err := p.github.GetPullRequestDiff(ctx, token, payload.Owner, payload.RepoName, payload.PRNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get pull request diff: %w", err)
 	}
 
-	log.Printf("[processor] PR #%d | repo: %s | diff: %d bytes", payload.PRNumber, payload.RepoFullName, len(diff))
+	log.Printf("[processor] PR #%d | repo: %s | diff: %d bytes", payload.PRNumber, payload.RepoFullName, len(prDiff))
+
+	files := diff.Parse(prDiff)
+	for _, file := range files {
+		log.Printf("[diff] %s (%s) | hunks: %d | added: %d lines",
+			file.Path, file.Language, len(file.Hunks), len(file.AddedLines()))
+	}
 
 	// TODO: Pass diff to AST analysis + LLM pipeline
 
