@@ -115,3 +115,35 @@ func (c *Client) GetPullRequestDiff(ctx context.Context, token, owner, repo stri
 
 	return string(body), nil
 }
+
+func (c *Client) GetFileContent(ctx context.Context, token, owner, repo, path, ref string) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", githubAPIBaseURL, owner, repo, path, ref)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "token "+token)
+	req.Header.Set("Accept", "application/vnd.github.raw+json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to make request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("file not found: %s@%s", path, ref)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to get file content: status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 25*1024*1024)) // Limit to 25MB
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return string(body), nil
+}
