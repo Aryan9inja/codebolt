@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,12 +13,16 @@ import (
 	"github.com/Aryan9inja/gotaskq/taskq"
 )
 
-type Handler struct {
-	secret []byte
-	queue  *taskq.Server
+type taskQueue interface {
+	Enqueue(ctx context.Context, opts taskq.JobOptions) (*taskq.Job, error)
 }
 
-func NewHandler(secret string, queue *taskq.Server) *Handler {
+type Handler struct {
+	secret []byte
+	queue  taskQueue
+}
+
+func NewHandler(secret string, queue taskQueue) *Handler {
 	return &Handler{secret: []byte(secret), queue: queue}
 }
 
