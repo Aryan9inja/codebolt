@@ -112,7 +112,7 @@ func NakedReturn(node any, fset *token.FileSet, ctx *analyzer.FileContext) []ana
 
 // MissingCancel flags context.WithCancel / WithTimeout / WithDeadline calls
 // where the cancel function is assigned to `_`.
-func MissingCancel(node interface{}, fset *token.FileSet, ctx *analyzer.FileContext) []analyzer.Finding {
+func MissingCancel(node any, fset *token.FileSet, ctx *analyzer.FileContext) []analyzer.Finding {
 	assign, ok := node.(*ast.AssignStmt)
 	if !ok {
 		return nil
