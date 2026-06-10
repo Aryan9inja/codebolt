@@ -37,7 +37,11 @@ func checkMutexAssign(assign *ast.AssignStmt, fset *token.FileSet, ctx *analyzer
 		//	mu := sync.Mutex{}
 		//
 		// This is only a heuristic and does NOT detect general mutex copies.
-		if isSelectorExpr(rhs, "sync", "Mutex") || isSelectorExpr(rhs, "sync", "RWMutex") {
+		expr := rhs
+		if comp, ok := rhs.(*ast.CompositeLit); ok {
+			expr = comp.Type
+		}
+		if isSelectorExpr(expr, "sync", "Mutex") || isSelectorExpr(expr, "sync", "RWMutex") {
 			line := posLine(assign.Pos(), fset)
 			return []analyzer.Finding{finding(
 				"mutex-copied-by-value",
@@ -60,7 +64,11 @@ func checkMutexCallArgs(call *ast.CallExpr, fset *token.FileSet, ctx *analyzer.F
 		//	foo(sync.Mutex{})
 		//
 		// General mutex-copy detection requires go/types.
-		if isSelectorExpr(arg, "sync", "Mutex") || isSelectorExpr(arg, "sync", "RWMutex") {
+		expr := arg
+		if comp, ok := arg.(*ast.CompositeLit); ok {
+			expr = comp.Type
+		}
+		if isSelectorExpr(expr, "sync", "Mutex") || isSelectorExpr(expr, "sync", "RWMutex") {
 			line := posLine(call.Pos(), fset)
 			return []analyzer.Finding{finding(
 				"mutex-copied-by-value",
