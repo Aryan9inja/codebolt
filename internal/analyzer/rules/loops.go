@@ -5,7 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 
-	"github.com/Aryan9inja/codebolt/internal/analyzer"
+	analyzer "github.com/Aryan9inja/codebolt/internal/analyzer/types"
 )
 
 // DeferredCloseInLoop flags defer inside for/range bodies.

@@ -4,7 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 
-	"github.com/Aryan9inja/codebolt/internal/analyzer"
+	analyzer "github.com/Aryan9inja/codebolt/internal/analyzer/types"
 )
 
 // ErrorIgnored flags function calls whose error return value is discarded.

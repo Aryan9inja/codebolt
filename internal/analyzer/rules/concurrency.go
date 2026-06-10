@@ -4,7 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 
-	"github.com/Aryan9inja/codebolt/internal/analyzer"
+	analyzer "github.com/Aryan9inja/codebolt/internal/analyzer/types"
 )
 
 // MutexCopiedByValue detects suspicious value copies that may involve

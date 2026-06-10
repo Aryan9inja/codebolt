@@ -4,7 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 
-	"github.com/Aryan9inja/codebolt/internal/analyzer"
+	analyzer "github.com/Aryan9inja/codebolt/internal/analyzer/types"
 )
 
 // onChangedLine returns true if the node's start position is on a line
