@@ -3,6 +3,7 @@ package rules
 import (
 	"go/ast"
 	"go/token"
+	"strings"
 
 	analyzer "github.com/Aryan9inja/codebolt/internal/analyzer/types"
 )
@@ -53,4 +54,32 @@ func PanicOutsideMain(node interface{}, fset *token.FileSet, ctx *analyzer.FileC
 		"panic in library code crashes the entire program - return an error instead",
 		line, ctx,
 	)}
+}
+
+// TodoScanner scans comment groups for TODO / FIXME / HACK markers.
+// This is not an AST walk rule - called directly from Analyze().
+func TodoScanner(comments []*ast.CommentGroup, fset *token.FileSet, ctx *analyzer.FileContext) []analyzer.Finding {
+	markers := []string{"TODO", "FIXME", "HACK"}
+	var findings []analyzer.Finding
+	for _, group := range comments {
+		for _, c := range group.List {
+			upper := strings.ToUpper(c.Text)
+			for _, marker := range markers {
+				if strings.Contains(upper, marker) {
+					line := posLine(c.Pos(), fset)
+					if !ctx.ChangedLines[line] {
+						continue
+					}
+					findings = append(findings, finding(
+						"todo-comment",
+						analyzer.SeverityInfo,
+						"unresolved comment marker in changed code: "+strings.TrimSpace(c.Text),
+						line, ctx,
+					))
+					break
+				}
+			}
+		}
+	}
+	return findings
 }
