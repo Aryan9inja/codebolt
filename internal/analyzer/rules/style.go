@@ -131,6 +131,11 @@ func InefficientAssignment(node any, fset *token.FileSet, ctx *analyzer.FileCont
 			continue
 		}
 
+		// Clear RHS idents from lastAssign (they were read)
+		for _, rhs := range assign.Rhs {
+			clearIdentRefs(rhs, lastAssign)
+		}
+
 		for _, lhs := range assign.Lhs {
 			id, ok := lhs.(*ast.Ident)
 			if !ok || id.Name == "_" {
@@ -151,10 +156,6 @@ func InefficientAssignment(node any, fset *token.FileSet, ctx *analyzer.FileCont
 				line: posLine(assign.Pos(), fset),
 				pos:  assign.Pos(),
 			}
-		}
-		// Clear RHS idents from lastAssign (they were read)
-		for _, rhs := range assign.Rhs {
-			clearIdentRefs(rhs, lastAssign)
 		}
 	}
 	return findings
