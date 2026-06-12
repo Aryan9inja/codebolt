@@ -233,3 +233,70 @@ func TestGetFileContent(t *testing.T) {
 		})
 	}
 }
+
+func TestPostReview(t *testing.T) {
+	client := NewClient("test-app", "dummy")
+
+	tests := []struct {
+		name        string
+		mockStatus  int
+		mockBody    string
+		expectError bool
+	}{
+		{
+			name:        "happy path",
+			mockStatus:  http.StatusOK,
+			mockBody:    "{}",
+			expectError: false,
+		},
+		{
+			name:        "server error",
+			mockStatus:  http.StatusInternalServerError,
+			mockBody:    `{"message": "Internal Server Error"}`,
+			expectError: true,
+		},
+		{
+			name:        "unprocessable entity",
+			mockStatus:  http.StatusUnprocessableEntity,
+			mockBody:    `{"message": "Validation Failed"}`,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client.httpClient.Transport = &mockTransport{
+				roundTripFunc: func(req *http.Request) (*http.Response, error) {
+					if req.Method != http.MethodPost {
+						t.Errorf("expected POST method, got %s", req.Method)
+					}
+					if !strings.Contains(req.URL.Path, "/reviews") {
+						t.Errorf("unexpected url: %s", req.URL.String())
+					}
+					if req.Header.Get("Accept") != "application/vnd.github+json" {
+						t.Errorf("missing or incorrect accept header")
+					}
+					return &http.Response{
+						StatusCode: tt.mockStatus,
+						Body:       io.NopCloser(strings.NewReader(tt.mockBody)),
+					}, nil
+				},
+			}
+
+			comments := []ReviewComment{
+				{Path: "test.go", Position: 1, Body: "Test comment"},
+			}
+			err := client.PostReview(context.Background(), "token", "owner", "repo", 1, "sha", "body", comments)
+			
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error, got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
