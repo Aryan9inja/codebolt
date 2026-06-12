@@ -52,6 +52,8 @@ func TestHandlePRReview(t *testing.T) {
 	oldTransport := http.DefaultTransport
 	defer func() { http.DefaultTransport = oldTransport }()
 
+	var postReviewCalled bool
+
 	http.DefaultTransport = &mockTransport{
 		roundTripFunc: func(req *http.Request) (*http.Response, error) {
 			if strings.Contains(req.URL.Path, "access_tokens") {
@@ -60,16 +62,31 @@ func TestHandlePRReview(t *testing.T) {
 					Body:       io.NopCloser(strings.NewReader(`{"token": "v1.test"}`)),
 				}, nil
 			}
-			if strings.Contains(req.URL.Path, "pulls") {
-				diffData := `diff --git a/test.txt b/test.txt
---- a/test.txt
-+++ b/test.txt
+			if req.Method == http.MethodGet && strings.Contains(req.URL.Path, "pulls") {
+				// Provide a go file diff with an error (e.g., fmt.Print instead of log) or something
+				// Or we could use the test case payloads to control diff content, but let's just use a fixed one with .go
+				diffData := `diff --git a/test.go b/test.go
+--- a/test.go
++++ b/test.go
 @@ -1 +1 @@
 -old
-+new`
++func main() { panic("test") }`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(diffData)),
+				}, nil
+			}
+			if req.Method == http.MethodGet && strings.Contains(req.URL.Path, "contents") {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`package main; func main() { panic("test") }`)),
+				}, nil
+			}
+			if req.Method == http.MethodPost && strings.Contains(req.URL.Path, "reviews") {
+				postReviewCalled = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{}`)),
 				}, nil
 			}
 			return &http.Response{
@@ -83,24 +100,28 @@ func TestHandlePRReview(t *testing.T) {
 	proc := NewProcessor(ghClient)
 
 	tests := []struct {
-		name        string
-		payload     string
-		expectError bool
+		name             string
+		payload          string
+		expectError      bool
+		expectPostReview bool
 	}{
 		{
-			name:        "happy path",
-			payload:     `{"installation_id": 123, "repo_full_name": "test/repo", "owner": "test", "repo_name": "repo", "pr_number": 1}`,
-			expectError: false,
+			name:             "happy path with go file",
+			payload:          `{"installation_id": 123, "repo_full_name": "test/repo", "owner": "test", "repo_name": "repo", "pr_number": 1, "head_sha": "abc1234"}`,
+			expectError:      false,
+			expectPostReview: true, // It triggers the panic rule
 		},
 		{
-			name:        "invalid payload",
-			payload:     `{bad json}`,
-			expectError: true,
+			name:             "invalid payload",
+			payload:          `{bad json}`,
+			expectError:      true,
+			expectPostReview: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			postReviewCalled = false
 			job := &taskq.Job{
 				Payload: []byte(tt.payload),
 			}
@@ -113,6 +134,9 @@ func TestHandlePRReview(t *testing.T) {
 			} else {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
+				}
+				if postReviewCalled != tt.expectPostReview {
+					t.Errorf("expected postReviewCalled=%v, got %v", tt.expectPostReview, postReviewCalled)
 				}
 			}
 		})
