@@ -1,6 +1,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -146,4 +147,47 @@ func (c *Client) GetFileContent(ctx context.Context, token, owner, repo, path, r
 	}
 
 	return string(body), nil
+}
+
+func (c *Client) PostReview(
+	ctx context.Context,
+	token, owner, repo string,
+	prNumber int,
+	commitSHA, reviewBody string,
+	comments []ReviewComment,
+) error {
+	reqBody := ReviewRequest{
+		CommitID: commitSHA,
+		Body:     reviewBody,
+		Event:    "COMMENT",
+		Comments: comments,
+	}
+
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal review request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews", githubAPIBaseURL, owner, repo, prNumber)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "token "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to make request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024)) // Read up to 4KB of the response body for error details
+		return fmt.Errorf("failed to post review: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
