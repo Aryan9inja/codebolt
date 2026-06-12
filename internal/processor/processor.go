@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/Aryan9inja/codebolt/internal/analyzer"
+	analyzerTypes "github.com/Aryan9inja/codebolt/internal/analyzer/types"
 	"github.com/Aryan9inja/codebolt/internal/diff"
 	"github.com/Aryan9inja/codebolt/internal/github"
 	"github.com/Aryan9inja/codebolt/internal/webhook"
@@ -31,11 +33,13 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 
 	log.Printf("[processor] PR #%d | repo: %s | head: %.8s", payload.PRNumber, payload.RepoFullName, payload.HeadSHA)
 
+	// 1. Authenticate with GitHub using the app's credentials to get an installation token.
 	token, err := p.github.GetInstallationToken(ctx, payload.InstallationID)
 	if err != nil {
 		return fmt.Errorf("failed to get installation token: %w", err)
 	}
 
+	// 2. Fetch the pull request diff using the GitHub API.
 	prDiff, err := p.github.GetPullRequestDiff(ctx, token, payload.Owner, payload.RepoName, payload.PRNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get pull request diff: %w", err)
@@ -43,6 +47,7 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 
 	log.Printf("[processor] PR #%d | repo: %s | diff: %d bytes", payload.PRNumber, payload.RepoFullName, len(prDiff))
 
+	// 3. Parse the diff to identify changed files and their line numbers.
 	files := diff.Parse(prDiff)
 	for _, file := range files {
 		log.Printf("[diff] %s (%s) | hunks: %d | added: %d lines",
@@ -63,6 +68,9 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 	}
 
 	az := analyzer.NewAnalyzer()
+
+	// 4. Run analyzer on each Go file, collect findings.
+	allFindings := []analyzerTypes.Finding{}
 	for _, f := range files {
 		// Currently only go lang is supported
 		// Later other languages support will be added
@@ -76,10 +84,58 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 		}
 		findings := az.Analyze(f.Path, content, f.ChangedLineNumbers(), lineToDiffPos, "") // TODO : Go version from go.mod
 
-		for _, finding := range findings {
-			log.Printf("[%s] %s L%d: %s", finding.Severity, finding.Rule, finding.Line, finding.Message)
+		allFindings = append(allFindings, findings...)
+	}
+
+	if len(allFindings) == 0 {
+		log.Printf("[processor] no findings for PR #%d | repo: %s", payload.PRNumber, payload.RepoFullName)
+		return nil
+	}
+
+	// 5. Split findings into inline comments vs file-level (DiffPos == 0)
+	var comments []github.ReviewComment
+	var fileLevelNotes []string
+
+	for _, f := range allFindings {
+		if f.DiffPos > 0 {
+			comments = append(comments, github.ReviewComment{
+				Path:     f.FilePath,
+				Position: f.DiffPos,
+				Body:     fmt.Sprintf("**[%s]** %s", f.Rule, f.Message),
+			})
+			log.Printf("[finding] %s:%d | DiffPos: %d | %s", f.FilePath, f.Line, f.DiffPos, f.Message)
+		} else {
+			fileLevelNotes = append(fileLevelNotes, f.Message)
 		}
 	}
+
+	// 6. Build review body
+	reviewBody := "## CodeBolt Review\n\n"
+	if len(fileLevelNotes) > 0 {
+		reviewBody += "### Additional findings\n" + strings.Join(fileLevelNotes, "\n") + "\n"
+	}
+
+	// 7. Post review to GitHub
+	err = p.github.PostReview(
+		ctx,
+		token,
+		payload.Owner,
+		payload.RepoName,
+		payload.PRNumber,
+		payload.HeadSHA,
+		reviewBody,
+		comments,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to post review: %w", err)
+	}
+
+	log.Printf(
+		"[processor] posted review for PR #%d | repo: %s | comments: %d",
+		payload.PRNumber,
+		payload.RepoFullName,
+		len(comments),
+	)
 
 	return nil
 }
