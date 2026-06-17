@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/Aryan9inja/codebolt/internal/github"
+	"github.com/Aryan9inja/codebolt/internal/llm"
 	"github.com/Aryan9inja/codebolt/internal/processor"
 	"github.com/Aryan9inja/codebolt/internal/webhook"
 	"github.com/Aryan9inja/gotaskq/taskq"
@@ -34,8 +35,17 @@ func main() {
 		log.Fatal("GITHUB_PRIVATE_KEY_PATH not set")
 	}
 
+	openRouterKey := os.Getenv("OPENROUTER_API_KEY")
+	if openRouterKey == "" {
+		log.Fatal("OPENROUTER_API_KEY not set")
+	}
+
 	ghClient := github.NewClient(appID, privateKeyPath)
-	proc := processor.NewProcessor(ghClient)
+
+	llmProvider := llm.NewOpenRouterProvider(openRouterKey)
+	llmPipeline := llm.NewPipeline(llmProvider, llm.DefaultModel)
+
+	proc := processor.NewProcessor(ghClient, llmPipeline)
 
 	queue, err := taskq.New(taskq.Options{
 		NumWorkers:       3,
