@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -138,4 +139,21 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 	)
 
 	return nil
+}
+
+// parseGoVersion extracts the version string from a go.mod file's `go` directive,
+// e.g. "go 1.22" or "go 1.22.0" -> "1.22" / "1.22.0". Returns "" if not found.
+func parseGoVersion(goModContent string) string {
+	scanner := bufio.NewScanner(strings.NewReader(goModContent))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "go ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			return fields[1]
+		}
+	}
+	return ""
 }
