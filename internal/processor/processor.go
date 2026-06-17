@@ -12,17 +12,20 @@ import (
 	analyzerTypes "github.com/Aryan9inja/codebolt/internal/analyzer/types"
 	"github.com/Aryan9inja/codebolt/internal/diff"
 	"github.com/Aryan9inja/codebolt/internal/github"
+	"github.com/Aryan9inja/codebolt/internal/llm"
 	"github.com/Aryan9inja/codebolt/internal/webhook"
 	"github.com/Aryan9inja/gotaskq/taskq"
 )
 
 type Processor struct {
 	github *github.Client
+	llm    *llm.Pipeline
 }
 
-func NewProcessor(githubClient *github.Client) *Processor {
+func NewProcessor(githubClient *github.Client, llmPipeline *llm.Pipeline) *Processor {
 	return &Processor{
 		github: githubClient,
+		llm:    llmPipeline,
 	}
 }
 
@@ -55,23 +58,29 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 			file.Path, file.Language, len(file.Hunks), len(file.AddedLines()))
 	}
 
-	// Build a map of new line numbers to their corresponding
-	// diff positions for quick lookup during analysis.
-	lineToDiffPos := make(map[int]int)
-	for _, fileDiff := range files {
-		for _, hunk := range fileDiff.Hunks {
-			for _, dl := range hunk.Lines {
-				if dl.NewLine > 0 {
-					lineToDiffPos[dl.NewLine] = dl.DiffPos
-				}
-			}
-		}
-	}
-
 	az := analyzer.NewAnalyzer()
+
+	// Fetch go.mod once for this PR's head commit to determine the module's
+	// Go version, used by rules like goroutine-loop-capture that need to know
+	// whether the loop variable capture semantics changed (Go 1.22+).
+	goVersion := ""
+	goModContent, err := p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, "go.mod", payload.HeadSHA)
+	if err != nil {
+		log.Printf("[processor] could not fetch go.mod, proceeding without go version: %v", err)
+	} else {
+		goVersion = parseGoVersion(goModContent)
+	}
 
 	// 4. Run analyzer on each Go file, collect findings.
 	allFindings := []analyzerTypes.Finding{}
+	type fileForLLM struct {
+		path          string
+		content       string
+		astFindings   []analyzerTypes.Finding
+		lineToDiffPos map[int]int
+	}
+	var llmFiles []fileForLLM
+
 	for _, f := range files {
 		// Currently only go lang is supported
 		// Later other languages support will be added
@@ -83,17 +92,52 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 			log.Printf("[processor] skipping %s: %v", f.Path, err)
 			continue
 		}
-		findings := az.Analyze(f.Path, content, f.ChangedLineNumbers(), lineToDiffPos, "") // TODO : Go version from go.mod
+
+		// Build a map of new line numbers to their corresponding
+		// diff positions for quick lookup during analysis for this file.
+		fileLineToDiffPos := make(map[int]int)
+		for _, hunk := range f.Hunks {
+			for _, dl := range hunk.Lines {
+				if dl.NewLine > 0 {
+					fileLineToDiffPos[dl.NewLine] = dl.DiffPos
+				}
+			}
+		}
+		findings := az.Analyze(f.Path, content, f.ChangedLineNumbers(), fileLineToDiffPos, goVersion)
 
 		allFindings = append(allFindings, findings...)
+
+		llmFiles = append(llmFiles, fileForLLM{
+			path:          f.Path,
+			content:       content,
+			astFindings:   findings,
+			lineToDiffPos: fileLineToDiffPos,
+		})
 	}
 
-	if len(allFindings) == 0 {
+	// 5. Run the LLM pipeline (Detector -> Suggester -> Reviewer) for each
+	// changed Go file independently. AST findings are passed as context only;
+	// LLM findings flow into a separate stream merged in step 6.
+	var llmFindings []llm.EnhancedFinding
+	if p.llm != nil {
+		for _, lf := range llmFiles {
+			enhanced, err := p.llm.RunForFile(ctx, lf.path, lf.content, lf.astFindings, lf.lineToDiffPos)
+			if err != nil {
+				log.Printf("[processor] llm pipeline failed for %s: %v", lf.path, err)
+				continue
+			}
+			llmFindings = append(llmFindings, enhanced...)
+		}
+	}
+
+	if len(allFindings) == 0 && len(llmFindings) == 0 {
 		log.Printf("[processor] no findings for PR #%d | repo: %s", payload.PRNumber, payload.RepoFullName)
 		return nil
 	}
 
-	// 5. Split findings into inline comments vs file-level (DiffPos == 0)
+	// 6. Split findings into inline comments vs file-level (DiffPos == 0).
+	// AST findings (allFindings) and LLM findings (llmFindings) are
+	// independent streams, merged here only at the comment-building step.
 	var comments []github.ReviewComment
 	var fileLevelNotes []string
 
@@ -110,7 +154,25 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 		}
 	}
 
-	// 6. Build review body
+	for _, f := range llmFindings {
+		body := fmt.Sprintf("**[%s]** %s (confidence: %.2f)", f.Rule, f.Message, f.Confidence)
+		if f.SuggestedFix != "" {
+			body += fmt.Sprintf("\n\nSuggested fix:\n```go\n%s\n```", f.SuggestedFix)
+		}
+
+		if f.DiffPos > 0 {
+			comments = append(comments, github.ReviewComment{
+				Path:     f.FilePath,
+				Position: f.DiffPos,
+				Body:     body,
+			})
+			log.Printf("[llm-finding] %s:%d | DiffPos: %d | confidence: %.2f | %s", f.FilePath, f.Line, f.DiffPos, f.Confidence, f.Message)
+		} else {
+			fileLevelNotes = append(fileLevelNotes, fmt.Sprintf("`%s` line %d: %s", f.FilePath, f.Line, body))
+		}
+	}
+
+	// 7. Build review body
 	reviewBody := "## CodeBolt Review\n\n"
 	if len(fileLevelNotes) > 0 {
 		reviewBody += "### Additional findings\n" + strings.Join(fileLevelNotes, "\n") + "\n"
@@ -132,10 +194,12 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 	}
 
 	log.Printf(
-		"[processor] posted review for PR #%d | repo: %s | comments: %d",
+		"[processor] posted review for PR #%d | repo: %s | comments: %d (ast: %d, llm: %d)",
 		payload.PRNumber,
 		payload.RepoFullName,
 		len(comments),
+		len(allFindings),
+		len(llmFindings),
 	)
 
 	return nil
