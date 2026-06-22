@@ -14,7 +14,7 @@ import (
 const openRouterBaseURL = "https://openrouter.ai/api/v1/chat/completions"
 
 // DefaultModel is the default model to use for OpenRouter requests.
-const DefaultModel = "poolside/laguna-m.1:free"
+const DefaultModel = "openai/gpt-oss-120b:free"
 
 type OpenRouterProvider struct {
 	apiKey     string
