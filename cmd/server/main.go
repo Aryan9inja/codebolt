@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/Aryan9inja/codebolt/internal/embeddings"
 	"github.com/Aryan9inja/codebolt/internal/github"
 	"github.com/Aryan9inja/codebolt/internal/llm"
 	"github.com/Aryan9inja/codebolt/internal/processor"
@@ -20,6 +21,7 @@ import (
 
 func main() {
 	godotenv.Load()
+
 	secret := os.Getenv("GITHUB_WEBHOOK_SECRET")
 	if secret == "" {
 		log.Fatal("GITHUB_WEBHOOK_SECRET not set")
@@ -40,11 +42,33 @@ func main() {
 		log.Fatal("OPENROUTER_API_KEY not set")
 	}
 
+	// Embeddings are optional — CodeBolt runs without pgvector,
+	// cross-PR context is simply skipped when these are unset.
+	var embProvider embeddings.EmbeddingProvider
+	var embStore *embeddings.Store
+
+	geminiAPIKey := os.Getenv("GEMINI_API_KEY")
+	databaseURL := os.Getenv("DATABASE_URL")
+
+	if geminiAPIKey != "" && databaseURL != "" {
+		embProvider = embeddings.NewGeminiEmbeddingProvider(geminiAPIKey)
+		store, err := embeddings.NewStore(context.Background(), databaseURL)
+		if err != nil {
+			log.Fatalf("Failed to init embeddings store: %v", err)
+		}
+		embStore = store
+		log.Println("Embeddings enabled (Gemini + pgvector)")
+	} else {
+		log.Println("Embeddings disabled — set GEMINI_API_KEY and DATABASE_URL to enable cross-PR pattern detection")
+	}
+
+	if embStore != nil {
+		defer embStore.Close()
+	}
+
 	ghClient := github.NewClient(appID, privateKeyPath)
-
 	llmProvider := llm.NewOpenRouterProvider(openRouterKey)
-	llmPipeline := llm.NewPipeline(llmProvider, llm.DefaultModel)
-
+	llmPipeline := llm.NewPipeline(llmProvider, llm.DefaultModel, embProvider, embStore)
 	proc := processor.NewProcessor(ghClient, llmPipeline)
 
 	queue, err := taskq.New(taskq.Options{
@@ -55,7 +79,6 @@ func main() {
 		log.Fatalf("Failed to init task queue: %v", err)
 	}
 
-	// register PR review job handler
 	if err := queue.RegisterFunc("pr-review", proc.HandlePRReview); err != nil {
 		log.Fatalf("Failed to register handler: %v", err)
 	}
@@ -81,7 +104,6 @@ func main() {
 		port = "8080"
 	}
 
-	// graceful shutdown
 	srv := &http.Server{Addr: ":" + port, Handler: r}
 
 	go func() {
