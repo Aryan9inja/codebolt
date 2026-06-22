@@ -328,7 +328,7 @@ func TestHandlePRReview_WithLLM(t *testing.T) {
 	}
 
 	ghClient := github.NewClient("test-app", keyPath)
-	pipeline := llm.NewPipeline(mockLLM, "test-model")
+	pipeline := llm.NewPipeline(mockLLM, "test-model", nil, nil)
 	proc := NewProcessor(ghClient, pipeline)
 
 	job := &taskq.Job{
@@ -438,7 +438,7 @@ func TestHandlePRReview_LLMFailureFaultTolerance(t *testing.T) {
 	}
 
 	ghClient := github.NewClient("test-app", keyPath)
-	pipeline := llm.NewPipeline(mockLLM, "test-model")
+	pipeline := llm.NewPipeline(mockLLM, "test-model", nil, nil)
 	proc := NewProcessor(ghClient, pipeline)
 
 	job := &taskq.Job{
