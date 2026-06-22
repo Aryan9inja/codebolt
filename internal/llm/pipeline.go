@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	analyzerTypes "github.com/Aryan9inja/codebolt/internal/analyzer/types"
+	"github.com/Aryan9inja/codebolt/internal/embeddings"
 )
 
 const (
@@ -17,30 +18,59 @@ const (
 
 // Pipeline runs the Detector -> Suggester -> Reviewer agent sequence
 // for a single file's content and AST findings.
+// embeddingProvider and store are optional - pass nil for both to run
+// without cross-PR context (no Postgres required).
 type Pipeline struct {
-	provider LLMProvider
-	model    string
+	provider          LLMProvider
+	model             string
+	embeddingProvider embeddings.EmbeddingProvider
+	store             *embeddings.Store
 }
 
-func NewPipeline(provider LLMProvider, model string) *Pipeline {
-	return &Pipeline{provider: provider, model: model}
+func NewPipeline(provider LLMProvider, model string, embProvider embeddings.EmbeddingProvider, store *embeddings.Store) *Pipeline {
+	return &Pipeline{
+		provider:          provider,
+		model:             model,
+		embeddingProvider: embProvider,
+		store:             store,
+	}
 }
 
 // RunForFile executes the full agent pipeline for one file and returns
 // EnhancedFindings, with DiffPos resolved via lineToDiffPos.
-// Findings with decision "drop" are discarded; "summary" findings get
-// DiffPos == 0 so they are routed to the review body, same as AST
-// file-level findings.
+// repo and prNumber are used for embedding storage/query only - no effect
+// on the review logic if embeddings are not configured.
 func (p *Pipeline) RunForFile(
 	ctx context.Context,
+	repo string,
+	prNumber int,
 	filePath, content string,
 	astFindings []analyzerTypes.Finding,
 	lineToDiffPos map[int]int,
 ) ([]EnhancedFinding, error) {
 	log.Printf("[llm-pipeline] starting RunForFile for path: %s | content length: %d | AST findings count: %d", filePath, len(content), len(astFindings))
 
+	// 0. Query pgvector for similar past findings in this repo to give Detector
+	// additional context. Skipped gracefully if embeddings are not configured.
+	var similarFindings []embeddings.FindingRecord
+	if p.embeddingProvider != nil && p.store != nil {
+		queryText := buildEmbeddingQueryText(filePath, astFindings)
+		vec, err := p.embeddingProvider.Embed(ctx, queryText)
+		if err != nil {
+			log.Printf("[llm-pipeline] embedding query failed for %s: %v (continuing without past-PR context)", filePath, err)
+		} else {
+			similar, err := p.store.SearchSimilar(ctx, repo, vec, 5)
+			if err != nil {
+				log.Printf("[llm-pipeline] store search failed for %s: %v (continuing without past-PR context)", filePath, err)
+			} else {
+				similarFindings = similar
+				log.Printf("[llm-pipeline] retrieved %d similar past findings for %s", len(similarFindings), filePath)
+			}
+		}
+	}
+
 	// 1. Detector
-	detected, err := p.runDetector(ctx, filePath, content, astFindings)
+	detected, err := p.runDetector(ctx, filePath, content, astFindings, similarFindings)
 	if err != nil {
 		log.Printf("[llm-pipeline] Detector step failed for %s: %v", filePath, err)
 		return nil, fmt.Errorf("detector failed for %s: %w", filePath, err)
@@ -105,16 +135,40 @@ func (p *Pipeline) RunForFile(
 		})
 	}
 
+	// 5. Embed and store each non-dropped finding for future cross-PR context.
+	// Errors here are non-fatal — review posting is never blocked by embedding failures.
+	if p.embeddingProvider != nil && p.store != nil {
+		for _, finding := range results {
+			embText := fmt.Sprintf("[%s] %s. Fix: %s", finding.Rule, finding.Message, finding.SuggestedFix)
+			vec, err := p.embeddingProvider.Embed(ctx, embText)
+			if err != nil {
+				log.Printf("[llm-pipeline] embed failed for finding %s in %s: %v (skipping save)", finding.Rule, filePath, err)
+				continue
+			}
+			rec := embeddings.FindingRecord{
+				Repo:      repo,
+				FilePath:  filePath,
+				Rule:      finding.Rule,
+				Message:   finding.Message,
+				PRNumber:  prNumber,
+				Embedding: vec,
+			}
+			if err := p.store.SaveFinding(ctx, rec); err != nil {
+				log.Printf("[llm-pipeline] store save failed for finding %s in %s: %v (non-fatal)", finding.Rule, filePath, err)
+			}
+		}
+	}
+
 	log.Printf("[llm-pipeline] completed RunForFile for %s | returning %d findings", filePath, len(results))
 	return results, nil
 }
 
-func (p *Pipeline) runDetector(ctx context.Context, filePath, content string, astFindings []analyzerTypes.Finding) (detectorOutput, error) {
+func (p *Pipeline) runDetector(ctx context.Context, filePath, content string, astFindings []analyzerTypes.Finding, similarFindings []embeddings.FindingRecord) (detectorOutput, error) {
 	log.Printf("[llm-pipeline] running Detector for %s", filePath)
 	resp, err := p.provider.Complete(ctx, CompletionRequest{
 		Model:       p.model,
 		System:      detectorSystemPrompt,
-		User:        buildDetectorPrompt(filePath, content, astFindings),
+		User:        buildDetectorPrompt(filePath, content, astFindings, similarFindings),
 		MaxTokens:   defaultMaxTokens,
 		Temperature: defaultTemperature,
 		JSONMode:    true,
@@ -190,28 +244,45 @@ func (p *Pipeline) runReviewer(ctx context.Context, items []suggesterItem) (revi
 	return out, nil
 }
 
-// cleanJSON extracts valid JSON content from model output, handling markdown code fences
-// and arbitrary conversational text surrounding the JSON object.
+// buildEmbeddingQueryText builds the text to embed for the pre-Detector pgvector
+// search. Uses AST finding messages as the semantic signal - richer than a bare
+// file path, avoids sending the full file to the embedding model.
+func buildEmbeddingQueryText(filePath string, astFindings []analyzerTypes.Finding) string {
+	if len(astFindings) == 0 {
+		return filePath
+	}
+	msgs := make([]string, 0, len(astFindings))
+	for _, f := range astFindings {
+		msgs = append(msgs, f.Message)
+	}
+	return filePath + ": " + strings.Join(msgs, "; ")
+}
+
+// cleanJSON extracts valid JSON content from model output, handling markdown
+// code fences and arbitrary conversational text surrounding the JSON object.
+//
+// Important: fence-stripping is only performed when the response itself is
+// wrapped in a top-level code fence (i.e. the trimmed string starts with
+// "```"). If backtick fences appear only inside JSON string values (e.g.
+// inside a "suggested_fix" field) the outer JSON must not be disturbed.
 func cleanJSON(s string) string {
 	s = strings.TrimSpace(s)
 
-	// If it contains a markdown code block, try to isolate its content
-	if strings.Contains(s, "```") {
-		startIdx := strings.Index(s, "```")
-		if startIdx != -1 {
-			remainder := s[startIdx+3:]
-			// Drop a leading "json" language hint if present (unconditionally trim prefix).
-			remainder = strings.TrimPrefix(remainder, "json")
-			endIdx := strings.Index(remainder, "```")
-			if endIdx != -1 {
-				s = remainder[:endIdx]
-			}
+	// Only strip an outer markdown code fence – one that wraps the entire
+	// response.  We detect this by requiring the string to start with "```".
+	// Fences embedded inside JSON string values (e.g. in suggested_fix) do
+	// not start the string, so they are left untouched.
+	if strings.HasPrefix(s, "```") {
+		remainder := s[3:]
+		remainder = strings.TrimPrefix(remainder, "json")
+		endIdx := strings.Index(remainder, "```")
+		if endIdx != -1 {
+			s = remainder[:endIdx]
 		}
 	}
 
 	s = strings.TrimSpace(s)
 
-	// Robust fallback: locate the first '{' and the last '}' to extract the core JSON object
 	firstBrace := strings.Index(s, "{")
 	lastBrace := strings.LastIndex(s, "}")
 	if firstBrace != -1 && lastBrace != -1 && lastBrace > firstBrace {
@@ -222,8 +293,7 @@ func cleanJSON(s string) string {
 }
 
 // severityFromConfidence maps a confidence score to a Severity for
-// EnhancedFinding, so it can flow through the same comment-building
-// logic as AST findings.
+// EnhancedFinding, so it flows through the same comment-building logic as AST findings.
 func severityFromConfidence(confidence float64) analyzerTypes.Severity {
 	switch {
 	case confidence >= 0.85:
