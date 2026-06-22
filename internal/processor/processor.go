@@ -121,7 +121,7 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 	var llmFindings []llm.EnhancedFinding
 	if p.llm != nil {
 		for _, lf := range llmFiles {
-			enhanced, err := p.llm.RunForFile(ctx, lf.path, lf.content, lf.astFindings, lf.lineToDiffPos)
+			enhanced, err := p.llm.RunForFile(ctx, payload.RepoName, payload.PRNumber, lf.path, lf.content, lf.astFindings, lf.lineToDiffPos)
 			if err != nil {
 				log.Printf("[processor] llm pipeline failed for %s: %v", lf.path, err)
 				continue
