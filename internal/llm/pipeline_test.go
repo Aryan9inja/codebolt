@@ -343,11 +343,15 @@ func TestPipeline_RunForFile(t *testing.T) {
 			wantErr:       "reviewer failed for main.go: reviewer validation error",
 		},
 		{
+			// The Reviewer now retries on bad JSON and, when all retries are
+			// exhausted, falls back to the Suggester output (confidence=0.75,
+			// decision="inline"). The pipeline no longer errors in this case;
+			// instead it surfaces the finding as a warning-level PR comment.
 			name:          "reviewer invalid json syntax error",
 			detectorResp:  detectorHappy,
 			suggesterResp: suggesterHappy,
 			reviewerResp:  `{invalid json}`,
-			wantErr:       "failed to parse reviewer output",
+			wantCount:     1, // falls back to 1 Suggester item
 		},
 	}
 
@@ -368,13 +372,11 @@ func TestPipeline_RunForFile(t *testing.T) {
 							return CompletionResponse{}, tt.suggesterErr
 						}
 						return CompletionResponse{Content: tt.suggesterResp}, nil
-					case 3:
+					default: // call 3+ are all Reviewer attempts (initial + retries)
 						if tt.reviewerErr != nil {
 							return CompletionResponse{}, tt.reviewerErr
 						}
 						return CompletionResponse{Content: tt.reviewerResp}, nil
-					default:
-						return CompletionResponse{}, errors.New("too many calls to provider")
 					}
 				},
 			}
