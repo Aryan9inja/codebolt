@@ -6,14 +6,24 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	analyzerTypes "github.com/Aryan9inja/codebolt/internal/analyzer/types"
 	"github.com/Aryan9inja/codebolt/internal/embeddings"
 )
 
 const (
-	defaultMaxTokens   = 1024
-	defaultTemperature = 0.2
+	defaultMaxTokens         = 1024
+	// reviewerMaxTokens is larger because the Reviewer echoes every input field
+	// (message, explanation, suggested_fix) back in its response before adding
+	// confidence and decision — free-tier models frequently hit the 1024 limit
+	// mid-JSON when those fields contain multi-line code snippets.
+	reviewerMaxTokens        = 2048
+	defaultTemperature       = 0.2
+
+	// retry configuration for LLM parse failures
+	maxParseRetries          = 2
+	retryBaseDelay           = 500 * time.Millisecond
 )
 
 // Pipeline runs the Detector -> Suggester -> Reviewer agent sequence
@@ -219,29 +229,68 @@ func (p *Pipeline) runSuggester(ctx context.Context, filePath, content string, c
 
 func (p *Pipeline) runReviewer(ctx context.Context, items []suggesterItem) (reviewerOutput, error) {
 	log.Printf("[llm-pipeline] running Reviewer with %d items", len(items))
-	resp, err := p.provider.Complete(ctx, CompletionRequest{
-		Model:       p.model,
-		System:      reviewerSystemPrompt,
-		User:        buildReviewerPrompt(items),
-		MaxTokens:   defaultMaxTokens,
-		Temperature: defaultTemperature,
-		JSONMode:    true,
-	})
-	if err != nil {
-		return reviewerOutput{}, err
+
+	prompt := buildReviewerPrompt(items)
+	var (lastRaw string; lastErr error)
+
+	for attempt := 0; attempt <= maxParseRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryBaseDelay * (1 << (attempt - 1)) // 500ms, 1s, …
+			log.Printf("[llm-pipeline] Reviewer retry %d/%d after %v (parse error: %v)", attempt, maxParseRetries, delay, lastErr)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return reviewerOutput{}, ctx.Err()
+			}
+		}
+
+		resp, err := p.provider.Complete(ctx, CompletionRequest{
+			Model:       p.model,
+			System:      reviewerSystemPrompt,
+			User:        prompt,
+			MaxTokens:   reviewerMaxTokens,
+			Temperature: defaultTemperature,
+			JSONMode:    true,
+		})
+		if err != nil {
+			return reviewerOutput{}, err
+		}
+
+		log.Printf("[llm-pipeline] Reviewer raw response (attempt %d):\n%s", attempt+1, resp.Content)
+		cleaned := cleanJSON(resp.Content)
+		log.Printf("[llm-pipeline] Reviewer cleaned response (attempt %d):\n%s", attempt+1, cleaned)
+
+		var out reviewerOutput
+		if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+			log.Printf("[llm-pipeline] Reviewer failed to parse JSON (attempt %d): %v", attempt+1, err)
+			lastRaw = resp.Content
+			lastErr = err
+			continue
+		}
+
+		log.Printf("[llm-pipeline] Reviewer succeeded | items returned: %d", len(out.Items))
+		return out, nil
 	}
 
-	log.Printf("[llm-pipeline] Reviewer raw response:\n%s", resp.Content)
-	cleaned := cleanJSON(resp.Content)
-	log.Printf("[llm-pipeline] Reviewer cleaned response:\n%s", cleaned)
-
-	var out reviewerOutput
-	if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
-		log.Printf("[llm-pipeline] Reviewer failed to parse JSON: %v", err)
-		return reviewerOutput{}, fmt.Errorf("failed to parse reviewer output: %w (raw: %s)", err, resp.Content)
+	// All retries exhausted — fall back to promoting the Suggester items
+	// directly so findings are never silently dropped. Each item gets a
+	// conservative confidence of 0.75 (→ SeverityWarning) and decision
+	// "inline" so they still surface as PR comments.
+	log.Printf("[llm-pipeline] Reviewer failed after %d attempts, falling back to Suggester output (last error: %v, raw: %s)",
+		maxParseRetries+1, lastErr, lastRaw)
+	fallbackItems := make([]reviewerItem, 0, len(items))
+	for _, it := range items {
+		fallbackItems = append(fallbackItems, reviewerItem{
+			Category:     it.Category,
+			Line:         it.Line,
+			Message:      it.Message,
+			Explanation:  it.Explanation,
+			SuggestedFix: it.SuggestedFix,
+			Confidence:   0.75,
+			Decision:     "inline",
+		})
 	}
-	log.Printf("[llm-pipeline] Reviewer succeeded | items returned: %d", len(out.Items))
-	return out, nil
+	return reviewerOutput{Items: fallbackItems}, nil
 }
 
 // buildEmbeddingQueryText builds the text to embed for the pre-Detector pgvector
