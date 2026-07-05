@@ -57,8 +57,8 @@ The full 3-call pipeline currently takes ~3 minutes per file on free-tier model 
 | HTTP routing  | chi, `net/http`                                                        |
 | Job queue     | [GoTaskQ](https://github.com/Aryan9inja/gotaskq) v1.2 (My own library) |
 | AST parsing   | `go/parser` (Phase 1) → tree-sitter (Phase 2, multi-language)          |
-| Vector search | pgvector on PostgreSQL (planned)                                       |
-| LLM provider  | OpenRouter (free tier), provider-agnostic interface                    |
+| Vector search | Gemini Embeddings (implemented), pgvector on PostgreSQL (planned)      |
+| LLM provider  | OpenRouter (free tier), Gemini API, provider-agnostic interface        |
 | Metrics       | Prometheus                                                             |
 | Deployment    | Fly.io(decided, may change)                                            |
 
@@ -93,8 +93,10 @@ codebolt/
 - [x] Full 3-agent LLM pipeline (Detector → Suggester → Reviewer), live-tested end-to-end via ngrok against a real PR — correctly caught an injected off-by-one bug at 0.95 confidence with a working suggested fix
 - [x] `go.mod` version detection feeding real Go-version context into AST rules (previously hardcoded empty)
 - [x] Clean separation of AST and LLM result streams, merged only at comment-building time
+- [x] LLM Provider Selector and Gemini Support: Implemented multiple model support (Gemini) with retry logic and increased token limits
+- [x] Optional embeddings support built around Gemini integration
 
-**Locked model:** `poolside/laguna-m.1:free` via OpenRouter, selected after a larger reasoning model (Nemotron-3-Ultra-550B) proved too slow/throttled on the free tier. Debugging approach: isolate provider issues via direct curl before assuming an application bug — this resolved the Nemotron timeout confusion cleanly and is the pattern to reuse for future model swaps.
+**Locked model:** Initially `poolside/laguna-m.1:free` via OpenRouter, selected after a larger reasoning model (Nemotron-3-Ultra-550B) proved too slow/throttled on the free tier. Gemini support has since been added as a secondary and potentially primary provider, complete with custom retry logic and updated token limits. Debugging approach: isolate provider issues via direct curl before assuming an application bug — this resolved the Nemotron timeout confusion cleanly and is the pattern to reuse for future model swaps.
 
 ---
 
@@ -102,9 +104,8 @@ codebolt/
 
 ### Near-term
 
-- **pgvector on PostgreSQL** — cross-PR pattern detection, e.g. surfacing "this exact pattern was flagged/fixed in PR #N before." Not yet wired in.
-- **Per-repo `.codebolt.yml` config loader** — the dispatch-map architecture has been ready since Day 6; loading hasn't been built. Will likely extend to LLM pipeline config too (e.g. per-repo model override) once the provider selector exists.
-- **LLM provider selector** — the `LLMProvider` interface already exists specifically so a second implementation (Gemini) can be dropped in without touching the pipeline or prompt logic. Not yet built.
+- **pgvector on PostgreSQL** — cross-PR pattern detection, e.g. surfacing "this exact pattern was flagged/fixed in PR #N before." Foundational embeddings package is implemented using Gemini; database layer not yet wired in.
+- **Per-repo `codebolt.yaml` config loader** — the dispatch-map architecture has been ready since Day 6; loading hasn't been built. Will extend to LLM pipeline config too (e.g. per-repo model override) since the provider selector exists now.
 - **`error-ignored` rule** — currently a stub; needs `go/types` for proper implementation.
 
 ### Language expansion — Python and JavaScript/TypeScript
