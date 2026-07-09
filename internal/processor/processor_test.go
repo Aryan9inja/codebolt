@@ -99,7 +99,7 @@ func TestHandlePRReview(t *testing.T) {
 	}
 
 	ghClient := github.NewClient("test-app", keyPath)
-	proc := NewProcessor(ghClient,nil)
+	proc := NewProcessor(ghClient, nil)
 
 	tests := []struct {
 		name             string

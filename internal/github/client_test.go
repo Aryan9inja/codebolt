@@ -287,7 +287,7 @@ func TestPostReview(t *testing.T) {
 				{Path: "test.go", Position: 1, Body: "Test comment"},
 			}
 			err := client.PostReview(context.Background(), "token", "owner", "repo", 1, "sha", "body", comments)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error, got none")

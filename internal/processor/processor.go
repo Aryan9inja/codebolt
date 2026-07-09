@@ -65,7 +65,7 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 
 	// 4. Run analyzer on each Go file, collect findings.
 	allFindings, llmFiles := p.runAnalyzer(ctx, token, &payload, files, goVersion, repoConfig)
-	
+
 	// 5. Run the LLM pipeline (Detector -> Suggester -> Reviewer) for each
 	// changed Go file independently. AST findings are passed as context only;
 	// LLM findings flow into a separate stream merged in step 6.

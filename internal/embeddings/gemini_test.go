@@ -43,12 +43,12 @@ func TestGeminiEmbeddingProvider_Embed(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		text        string
-		transport   roundTripFunc
-		wantLen     int
-		wantErr     string
-		wantFirst   float32 // spot-check first element
+		name      string
+		text      string
+		transport roundTripFunc
+		wantLen   int
+		wantErr   string
+		wantFirst float32 // spot-check first element
 	}{
 		{
 			name: "happy path - returns embedding vector",
