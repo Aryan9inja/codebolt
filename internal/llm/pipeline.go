@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -13,17 +14,17 @@ import (
 )
 
 const (
-	defaultMaxTokens         = 1024
+	defaultMaxTokens = 1024
 	// reviewerMaxTokens is larger because the Reviewer echoes every input field
 	// (message, explanation, suggested_fix) back in its response before adding
 	// confidence and decision — free-tier models frequently hit the 1024 limit
 	// mid-JSON when those fields contain multi-line code snippets.
-	reviewerMaxTokens        = 2048
-	defaultTemperature       = 0.2
+	reviewerMaxTokens  = 2048
+	defaultTemperature = 0.2
 
 	// retry configuration for LLM parse failures
-	maxParseRetries          = 2
-	retryBaseDelay           = 500 * time.Millisecond
+	maxParseRetries = 2
+	retryBaseDelay  = 500 * time.Millisecond
 )
 
 // Pipeline runs the Detector -> Suggester -> Reviewer agent sequence
@@ -44,6 +45,30 @@ func NewPipeline(provider LLMProvider, model string, embProvider embeddings.Embe
 		embeddingProvider: embProvider,
 		store:             store,
 	}
+}
+
+// CloneWithOverrides creates a shallow copy of the pipeline with a new model and provider.
+// If providerName is set, it attempts to load keys from environment to create the new provider.
+func (p *Pipeline) CloneWithOverrides(providerName, model string) *Pipeline {
+	clone := *p
+	if model != "" {
+		clone.model = model
+	}
+	if providerName != "" {
+		switch providerName {
+		case "gemini":
+			key := os.Getenv("GEMINI_API_KEY")
+			if key != "" {
+				clone.provider = NewGeminiProvider(key)
+			}
+		case "openrouter":
+			key := os.Getenv("OPENROUTER_API_KEY")
+			if key != "" {
+				clone.provider = NewOpenRouterProvider(key)
+			}
+		}
+	}
+	return &clone
 }
 
 // RunForFile executes the full agent pipeline for one file and returns
@@ -231,7 +256,10 @@ func (p *Pipeline) runReviewer(ctx context.Context, items []suggesterItem) (revi
 	log.Printf("[llm-pipeline] running Reviewer with %d items", len(items))
 
 	prompt := buildReviewerPrompt(items)
-	var (lastRaw string; lastErr error)
+	var (
+		lastRaw string
+		lastErr error
+	)
 
 	for attempt := 0; attempt <= maxParseRetries; attempt++ {
 		if attempt > 0 {
