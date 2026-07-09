@@ -10,11 +10,13 @@ import (
 
 	"github.com/Aryan9inja/codebolt/internal/analyzer"
 	analyzerTypes "github.com/Aryan9inja/codebolt/internal/analyzer/types"
+	"github.com/Aryan9inja/codebolt/internal/config"
 	"github.com/Aryan9inja/codebolt/internal/diff"
 	"github.com/Aryan9inja/codebolt/internal/github"
 	"github.com/Aryan9inja/codebolt/internal/llm"
 	"github.com/Aryan9inja/codebolt/internal/webhook"
 	"github.com/Aryan9inja/gotaskq/taskq"
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 type Processor struct {
@@ -58,35 +60,103 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 			file.Path, file.Language, len(file.Hunks), len(file.AddedLines()))
 	}
 
-	az := analyzer.NewAnalyzer()
+	goVersion := p.fetchGoVersion(ctx, token, &payload)
+	repoConfig := p.fetchConfig(ctx, token, &payload)
 
-	// Fetch go.mod once for this PR's head commit to determine the module's
-	// Go version, used by rules like goroutine-loop-capture that need to know
-	// whether the loop variable capture semantics changed (Go 1.22+).
-	goVersion := ""
+	// 4. Run analyzer on each Go file, collect findings.
+	allFindings, llmFiles := p.runAnalyzer(ctx, token, &payload, files, goVersion, repoConfig)
+	
+	// 5. Run the LLM pipeline (Detector -> Suggester -> Reviewer) for each
+	// changed Go file independently. AST findings are passed as context only;
+	// LLM findings flow into a separate stream merged in step 6.
+	llmFindings := p.runLLMPipeline(ctx, &payload, llmFiles, repoConfig)
+
+	if len(allFindings) == 0 && len(llmFindings) == 0 {
+		log.Printf("[processor] no findings for PR #%d | repo: %s", payload.PRNumber, payload.RepoFullName)
+		return nil
+	}
+
+	// 6. Split findings into inline comments vs file-level (DiffPos == 0).
+	// AST findings (allFindings) and LLM findings (llmFindings) are
+	// independent streams, merged here only at the comment-building step.
+	// 7. Build review body and post review to GitHub
+	return p.postReview(ctx, token, &payload, allFindings, llmFindings)
+}
+
+func (p *Processor) fetchGoVersion(ctx context.Context, token string, payload *webhook.PRReviewJobPayload) string {
 	goModContent, err := p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, "go.mod", payload.HeadSHA)
 	if err != nil {
 		log.Printf("[processor] could not fetch go.mod, proceeding without go version: %v", err)
-	} else {
-		goVersion = parseGoVersion(goModContent)
+		return ""
+	}
+	return parseGoVersion(goModContent)
+}
+
+func (p *Processor) fetchConfig(ctx context.Context, token string, payload *webhook.PRReviewJobPayload) *config.CodeBoltConfig {
+	configSHA := payload.BaseSHA
+	if configSHA == "" {
+		configSHA = payload.HeadSHA
+	}
+	configContent, err := p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, "codebolt.yaml", configSHA)
+	if err != nil {
+		// Fallback to .yml extension
+		configContent, err = p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, "codebolt.yml", configSHA)
+		if err != nil {
+			log.Printf("[processor] no codebolt.yaml or codebolt.yml found for repo %s (or error: %v)", payload.RepoFullName, err)
+			return nil
+		}
 	}
 
-	// 4. Run analyzer on each Go file, collect findings.
-	allFindings := []analyzerTypes.Finding{}
-	type fileForLLM struct {
-		path          string
-		content       string
-		astFindings   []analyzerTypes.Finding
-		lineToDiffPos map[int]int
+	parsedConfig, err := config.Parse([]byte(configContent))
+	if err != nil {
+		log.Printf("[processor] failed to parse codebolt.yaml: %v", err)
+		return nil
 	}
+
+	log.Printf("[processor] loaded codebolt.yaml for repo %s", payload.RepoFullName)
+	return parsedConfig
+}
+
+type fileForLLM struct {
+	path          string
+	content       string
+	astFindings   []analyzerTypes.Finding
+	lineToDiffPos map[int]int
+}
+
+func (p *Processor) runAnalyzer(
+	ctx context.Context,
+	token string,
+	payload *webhook.PRReviewJobPayload,
+	files []diff.FileDiff,
+	goVersion string,
+	repoConfig *config.CodeBoltConfig,
+) ([]analyzerTypes.Finding, []fileForLLM) {
+	az := analyzer.NewAnalyzer()
+	var allFindings []analyzerTypes.Finding
 	var llmFiles []fileForLLM
 
 	for _, f := range files {
 		// Currently only go lang is supported
-		// Later other languages support will be added
 		if f.Language != "go" {
 			continue
 		}
+
+		skip := false
+		if repoConfig != nil {
+			for _, pattern := range repoConfig.Analyzer.ExcludePaths {
+				matched, err := doublestar.Match(pattern, f.Path)
+				if err == nil && matched {
+					skip = true
+					break
+				}
+			}
+		}
+		if skip {
+			log.Printf("[processor] skipping %s due to exclude_paths", f.Path)
+			continue
+		}
+
 		content, err := p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, f.Path, payload.HeadSHA)
 		if err != nil {
 			log.Printf("[processor] skipping %s: %v", f.Path, err)
@@ -103,25 +173,44 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 				}
 			}
 		}
+
 		findings := az.Analyze(f.Path, content, f.ChangedLineNumbers(), fileLineToDiffPos, goVersion)
 
-		allFindings = append(allFindings, findings...)
+		var filteredFindings []analyzerTypes.Finding
+		for _, finding := range findings {
+			if isRuleEnabled(finding.Rule, repoConfig) {
+				filteredFindings = append(filteredFindings, finding)
+			}
+		}
 
+		allFindings = append(allFindings, filteredFindings...)
 		llmFiles = append(llmFiles, fileForLLM{
 			path:          f.Path,
 			content:       content,
-			astFindings:   findings,
+			astFindings:   filteredFindings,
 			lineToDiffPos: fileLineToDiffPos,
 		})
 	}
 
-	// 5. Run the LLM pipeline (Detector -> Suggester -> Reviewer) for each
-	// changed Go file independently. AST findings are passed as context only;
-	// LLM findings flow into a separate stream merged in step 6.
+	return allFindings, llmFiles
+}
+
+func (p *Processor) runLLMPipeline(
+	ctx context.Context,
+	payload *webhook.PRReviewJobPayload,
+	llmFiles []fileForLLM,
+	repoConfig *config.CodeBoltConfig,
+) []llm.EnhancedFinding {
 	var llmFindings []llm.EnhancedFinding
-	if p.llm != nil {
+	activePipeline := p.llm
+
+	if activePipeline != nil && repoConfig != nil && (repoConfig.LLM.Provider != "" || repoConfig.LLM.Model != "") {
+		activePipeline = activePipeline.CloneWithOverrides(repoConfig.LLM.Provider, repoConfig.LLM.Model)
+	}
+
+	if activePipeline != nil {
 		for _, lf := range llmFiles {
-			enhanced, err := p.llm.RunForFile(ctx, payload.RepoName, payload.PRNumber, lf.path, lf.content, lf.astFindings, lf.lineToDiffPos)
+			enhanced, err := activePipeline.RunForFile(ctx, payload.RepoName, payload.PRNumber, lf.path, lf.content, lf.astFindings, lf.lineToDiffPos)
 			if err != nil {
 				log.Printf("[processor] llm pipeline failed for %s: %v", lf.path, err)
 				continue
@@ -130,14 +219,16 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 		}
 	}
 
-	if len(allFindings) == 0 && len(llmFindings) == 0 {
-		log.Printf("[processor] no findings for PR #%d | repo: %s", payload.PRNumber, payload.RepoFullName)
-		return nil
-	}
+	return llmFindings
+}
 
-	// 6. Split findings into inline comments vs file-level (DiffPos == 0).
-	// AST findings (allFindings) and LLM findings (llmFindings) are
-	// independent streams, merged here only at the comment-building step.
+func (p *Processor) postReview(
+	ctx context.Context,
+	token string,
+	payload *webhook.PRReviewJobPayload,
+	allFindings []analyzerTypes.Finding,
+	llmFindings []llm.EnhancedFinding,
+) error {
 	var comments []github.ReviewComment
 	var fileLevelNotes []string
 
@@ -172,14 +263,12 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 		}
 	}
 
-	// 7. Build review body
 	reviewBody := "## CodeBolt Review\n\n"
 	if len(fileLevelNotes) > 0 {
 		reviewBody += "### Additional findings\n" + strings.Join(fileLevelNotes, "\n") + "\n"
 	}
 
-	// 7. Post review to GitHub
-	err = p.github.PostReview(
+	err := p.github.PostReview(
 		ctx,
 		token,
 		payload.Owner,
@@ -205,8 +294,7 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 	return nil
 }
 
-// parseGoVersion extracts the version string from a go.mod file's `go` directive,
-// e.g. "go 1.22" or "go 1.22.0" -> "1.22" / "1.22.0". Returns "" if not found.
+// parseGoVersion extracts the version string from a go.mod file's `go` directive.
 func parseGoVersion(goModContent string) string {
 	scanner := bufio.NewScanner(strings.NewReader(goModContent))
 	for scanner.Scan() {
@@ -220,4 +308,16 @@ func parseGoVersion(goModContent string) string {
 		}
 	}
 	return ""
+}
+
+func isRuleEnabled(ruleName string, cfg *config.CodeBoltConfig) bool {
+	if cfg == nil {
+		return true
+	}
+	for _, r := range cfg.Analyzer.Rules {
+		if r.Name == ruleName {
+			return r.Enabled
+		}
+	}
+	return true
 }
