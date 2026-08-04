@@ -14,6 +14,7 @@ const (
 	geminiEmbedModel = "gemini-embedding-001"
 	geminiEmbedURL   = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiEmbedModel + ":embedContent"
 	outputDimensions = 768 // MRL-truncated; stays within pgvector's practical index dimension ceiling
+	defaultTimeout   = 30 * time.Second
 )
 
 type GeminiEmbeddingProvider struct {
@@ -24,7 +25,7 @@ type GeminiEmbeddingProvider struct {
 func NewGeminiEmbeddingProvider(apiKey string) *GeminiEmbeddingProvider {
 	return &GeminiEmbeddingProvider{
 		apiKey: apiKey,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: defaultTimeout},
 	}
 }
 
