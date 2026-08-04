@@ -19,6 +19,12 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
+const (
+	defaultConfigName  = "codebolt.yaml"
+	fallbackConfigName = "codebolt.yml"
+	goModFileName      = "go.mod"
+)
+
 type Processor struct {
 	github *github.Client
 	llm    *llm.Pipeline
@@ -39,13 +45,11 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 
 	log.Printf("[processor] PR #%d | repo: %s | head: %.8s", payload.PRNumber, payload.RepoFullName, payload.HeadSHA)
 
-	// 1. Authenticate with GitHub using the app's credentials to get an installation token.
 	token, err := p.github.GetInstallationToken(ctx, payload.InstallationID)
 	if err != nil {
 		return fmt.Errorf("failed to get installation token: %w", err)
 	}
 
-	// 2. Fetch the pull request diff using the GitHub API.
 	prDiff, err := p.github.GetPullRequestDiff(ctx, token, payload.Owner, payload.RepoName, payload.PRNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get pull request diff: %w", err)
@@ -53,7 +57,6 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 
 	log.Printf("[processor] PR #%d | repo: %s | diff: %d bytes", payload.PRNumber, payload.RepoFullName, len(prDiff))
 
-	// 3. Parse the diff to identify changed files and their line numbers.
 	files := diff.Parse(prDiff)
 	for _, file := range files {
 		log.Printf("[diff] %s (%s) | hunks: %d | added: %d lines",
@@ -63,10 +66,9 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 	goVersion := p.fetchGoVersion(ctx, token, &payload)
 	repoConfig := p.fetchConfig(ctx, token, &payload)
 
-	// 4. Run analyzer on each Go file, collect findings.
 	allFindings, llmFiles := p.runAnalyzer(ctx, token, &payload, files, goVersion, repoConfig)
 
-	// 5. Run the LLM pipeline (Detector -> Suggester -> Reviewer) for each
+	// Run the LLM pipeline (Detector -> Suggester -> Reviewer) for each
 	// changed Go file independently. AST findings are passed as context only;
 	// LLM findings flow into a separate stream merged in step 6.
 	llmFindings := p.runLLMPipeline(ctx, &payload, llmFiles, repoConfig)
@@ -76,15 +78,14 @@ func (p *Processor) HandlePRReview(ctx context.Context, job *taskq.Job) error {
 		return nil
 	}
 
-	// 6. Split findings into inline comments vs file-level (DiffPos == 0).
+	// Split findings into inline comments vs file-level (DiffPos == 0).
 	// AST findings (allFindings) and LLM findings (llmFindings) are
 	// independent streams, merged here only at the comment-building step.
-	// 7. Build review body and post review to GitHub
 	return p.postReview(ctx, token, &payload, allFindings, llmFindings)
 }
 
 func (p *Processor) fetchGoVersion(ctx context.Context, token string, payload *webhook.PRReviewJobPayload) string {
-	goModContent, err := p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, "go.mod", payload.HeadSHA)
+	goModContent, err := p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, goModFileName, payload.HeadSHA)
 	if err != nil {
 		log.Printf("[processor] could not fetch go.mod, proceeding without go version: %v", err)
 		return ""
@@ -97,10 +98,10 @@ func (p *Processor) fetchConfig(ctx context.Context, token string, payload *webh
 	if configSHA == "" {
 		configSHA = payload.HeadSHA
 	}
-	configContent, err := p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, "codebolt.yaml", configSHA)
+	configContent, err := p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, defaultConfigName, configSHA)
 	if err != nil {
 		// Fallback to .yml extension
-		configContent, err = p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, "codebolt.yml", configSHA)
+		configContent, err = p.github.GetFileContent(ctx, token, payload.Owner, payload.RepoName, fallbackConfigName, configSHA)
 		if err != nil {
 			log.Printf("[processor] no codebolt.yaml or codebolt.yml found for repo %s (or error: %v)", payload.RepoFullName, err)
 			return nil
