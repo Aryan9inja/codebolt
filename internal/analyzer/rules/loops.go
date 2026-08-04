@@ -1,7 +1,7 @@
 package rules
 
 import (
-	"fmt"
+	"errors"
 	"go/ast"
 	"go/token"
 
@@ -165,7 +165,7 @@ func goVersionAtLeast(version string, major, minor int) bool {
 	return vMin >= minor
 }
 
-var errBadVersion = fmt.Errorf("bad version")
+var errBadVersion = errors.New("bad version")
 
 func parseVersion(v string, major, minor *int) (int, error) {
 	// simple parser: "1.22" or "1.22.3"
