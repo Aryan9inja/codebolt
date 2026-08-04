@@ -19,6 +19,12 @@ import (
 	"github.com/joho/godotenv"
 )
 
+const (
+	defaultPort     = "8080"
+	prReviewQueue   = "pr-review"
+	numQueueWorkers = 3
+)
+
 func main() {
 	godotenv.Load()
 
@@ -39,7 +45,7 @@ func main() {
 
 	openRouterKey := os.Getenv("OPENROUTER_API_KEY")
 	if openRouterKey == "" {
-		log.Fatal("OPENROUTER_API_KEY not set")
+		log.Println("OPENROUTER_API_KEY not set")
 	}
 
 	// Embeddings are optional — CodeBolt runs without pgvector,
@@ -72,14 +78,14 @@ func main() {
 	proc := processor.NewProcessor(ghClient, llmPipeline)
 
 	queue, err := taskq.New(taskq.Options{
-		NumWorkers:       3,
-		DefaultQueueName: "pr-review",
+		NumWorkers:       numQueueWorkers,
+		DefaultQueueName: prReviewQueue,
 	})
 	if err != nil {
 		log.Fatalf("Failed to init task queue: %v", err)
 	}
 
-	if err := queue.RegisterFunc("pr-review", proc.HandlePRReview); err != nil {
+	if err := queue.RegisterFunc(prReviewQueue, proc.HandlePRReview); err != nil {
 		log.Fatalf("Failed to register handler: %v", err)
 	}
 
@@ -101,7 +107,7 @@ func main() {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = defaultPort
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
