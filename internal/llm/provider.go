@@ -2,8 +2,6 @@ package llm
 
 import "context"
 
-// CompletionRequest is a provider-agnostic request for a text completion.
-// Providers translate this into their own API's request shape.
 type CompletionRequest struct {
 	Model       string
 	System      string
@@ -13,7 +11,6 @@ type CompletionRequest struct {
 	JSONMode    bool // hint to the provider to constrain output to JSON
 }
 
-// CompletionResponse is a provider-agnostic chat completion response.
 type CompletionResponse struct {
 	Content string
 }
