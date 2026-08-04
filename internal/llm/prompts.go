@@ -81,7 +81,6 @@ func buildDetectorPrompt(filePath, content string, astFindings []analyzerTypes.F
 	return sb.String()
 }
 
-// buildSuggesterPrompt formats the user prompt for the Suggester agent.
 func buildSuggesterPrompt(filePath, content string, candidates []detectorCandidate) string {
 	var sb strings.Builder
 
@@ -100,7 +99,6 @@ func buildSuggesterPrompt(filePath, content string, candidates []detectorCandida
 	return sb.String()
 }
 
-// buildReviewerPrompt formats the user prompt for the Reviewer agent.
 func buildReviewerPrompt(items []suggesterItem) string {
 	var sb strings.Builder
 
