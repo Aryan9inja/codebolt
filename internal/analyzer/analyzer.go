@@ -77,13 +77,12 @@ func (a *Analyzer) Analyze(filePath, content string, changedLines map[int]bool, 
 	fset := a.fset
 	f, err := parser.ParseFile(fset, filePath, content, parser.ParseComments)
 	if err != nil {
-		// Syntax errors aren't our problem to flag — return empty
+		// Invalid syntax is handled upstream; skip analysis.
 		return nil
 	}
 
 	var findings []types.Finding
 
-	// AST walk via dispatch table
 	ast.Inspect(f, func(node ast.Node) bool {
 		if node == nil {
 			return true
@@ -97,7 +96,7 @@ func (a *Analyzer) Analyze(filePath, content string, changedLines map[int]bool, 
 		return true
 	})
 
-	// Comment pass — todo/fixme/hack scanner (comments aren't AST nodes)
+	// Scan for unresolved TODO/FIXME/HACK markers in comments.
 	findings = append(findings, rules.TodoScanner(f.Comments, fset, ctx)...)
 
 	return findings
