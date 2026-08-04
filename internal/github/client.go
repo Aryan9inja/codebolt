@@ -13,7 +13,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const githubAPIBaseURL = "https://api.github.com"
+const (
+	githubAPIBaseURL = "https://api.github.com"
+	maxBodySize      = 25 * 1024 * 1024 // 25MB limit for large files/diffs
+	maxErrorBodySize = 4 * 1024         // 4KB limit for error responses
+)
 
 type Client struct {
 	appID          string
@@ -109,7 +113,7 @@ func (c *Client) GetPullRequestDiff(ctx context.Context, token, owner, repo stri
 		return "", fmt.Errorf("failed to get pull request diff: status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 25*1024*1024)) // Limit to 25MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -141,7 +145,7 @@ func (c *Client) GetFileContent(ctx context.Context, token, owner, repo, path, r
 		return "", fmt.Errorf("failed to get file content: status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 25*1024*1024)) // Limit to 25MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -185,7 +189,7 @@ func (c *Client) PostReview(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024)) // Read up to 4KB of the response body for error details
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 		return fmt.Errorf("failed to post review: status %d, body: %s", resp.StatusCode, string(body))
 	}
 
