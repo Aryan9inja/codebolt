@@ -32,8 +32,7 @@ func ContextNotPropagated(node any, fset *token.FileSet, ctx *analyzer.FileConte
 		return nil
 	}
 
-	// Known calls that should receive ctx but have context-unaware variants
-	// flagged if called without the ctx param name as first argument
+	// Standard library calls that expose non-context variants, potentially leaking resources or dropping timeouts if misused.
 	suspectCalls := map[string]map[string]bool{
 		"http": {"Get": true, "Post": true, "Do": true},
 		"sql":  {"Query": true, "Exec": true, "QueryRow": true},
