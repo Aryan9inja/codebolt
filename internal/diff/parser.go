@@ -15,7 +15,7 @@ const (
 
 type DiffLine struct {
 	Type    LineType
-	Content string // line content without the leading +, -, or space
+	Content string // Content is the raw line text, excluding the prefix character.
 	OldLine int    // 0 if added line, otherwise the line number in the old file
 	NewLine int    // 0 if removed line, otherwise the line number in the new file
 
@@ -91,11 +91,6 @@ func Parse(raw string) []FileDiff {
 			} else {
 				currFile.Path = strings.TrimPrefix(newFilePath, "b/")
 				currFile.Language = langFromExt(filepath.Ext(currFile.Path))
-			}
-			// Rename: oldFilePath != newFilePath and both are not /dev/null
-			if currFile.OldPath != "" && currFile.OldPath != currFile.Path {
-				// Old path is already set; Path is set to new path.
-				// No special handling needed here since we already have both paths.
 			}
 
 		case strings.HasPrefix(line, "new file mode"):
