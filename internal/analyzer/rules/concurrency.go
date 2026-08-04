@@ -32,7 +32,7 @@ func checkMutexAssign(assign *ast.AssignStmt, fset *token.FileSet, ctx *analyzer
 		return nil
 	}
 	for _, rhs := range assign.Rhs {
-		// Detect direct composite literals like:
+		// Identify composite literals explicitly assigned to a sync object to detect shallow copies:
 		//
 		//	mu := sync.Mutex{}
 		//
