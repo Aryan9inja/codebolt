@@ -17,6 +17,13 @@ type taskQueue interface {
 	Enqueue(ctx context.Context, opts taskq.JobOptions) (*taskq.Job, error)
 }
 
+const (
+	maxPayloadSize  = 25 * 1024 * 1024 // 25MB limit to prevent memory exhaustion
+	maxJobRetries   = 3                // standard retry limit for async jobs
+	signaturePrefix = "sha256="
+	prReviewJobType = "pr-review"
+)
+
 type Handler struct {
 	secret []byte
 	queue  taskQueue
@@ -27,7 +34,7 @@ func NewHandler(secret string, queue taskQueue) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 25*1024*1024) // Limit request body to 25MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxPayloadSize)
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "request too large or failed to read body", http.StatusBadRequest)
@@ -59,7 +66,7 @@ func (h *Handler) validateSignature(signature string, payload []byte) bool {
 	}
 	mac := hmac.New(sha256.New, h.secret)
 	mac.Write(payload)
-	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	expected := signaturePrefix + hex.EncodeToString(mac.Sum(nil))
 
 	return hmac.Equal([]byte(expected), []byte(signature))
 }
@@ -91,9 +98,9 @@ func (h *Handler) handlePullRequest(w http.ResponseWriter, r *http.Request, payl
 	}
 
 	_, err = h.queue.Enqueue(r.Context(), taskq.JobOptions{
-		Type:       "pr-review",
+		Type:       prReviewJobType,
 		Payload:    jobPayload,
-		MaxRetries: 3,
+		MaxRetries: maxJobRetries,
 	})
 	if err != nil {
 		log.Printf("Failed to enqueue job: %v", err)
