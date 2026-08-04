@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-const openRouterBaseURL = "https://openrouter.ai/api/v1/chat/completions"
-
-// DefaultModel is the default model to use for OpenRouter requests.
-const DefaultModel = "openai/gpt-oss-120b:free"
+const (
+	openRouterBaseURL = "https://openrouter.ai/api/v1/chat/completions"
+	DefaultModel      = "openai/gpt-oss-120b:free"
+)
 
 type OpenRouterProvider struct {
 	apiKey     string
@@ -24,7 +24,7 @@ type OpenRouterProvider struct {
 func NewOpenRouterProvider(apiKey string) *OpenRouterProvider {
 	return &OpenRouterProvider{
 		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: 180 * time.Second},
+		httpClient: &http.Client{Timeout: defaultTimeout},
 	}
 }
 
