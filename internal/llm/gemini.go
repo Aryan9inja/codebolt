@@ -11,8 +11,11 @@ import (
 	"time"
 )
 
-// DefaultGeminiModel is the default model to use for Gemini requests.
-const DefaultGeminiModel = "gemini-3.5-flash"
+const (
+	DefaultGeminiModel    = "gemini-3.5-flash"
+	geminiBaseURLTemplate = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s"
+	defaultTimeout        = 180 * time.Second
+)
 
 type GeminiProvider struct {
 	apiKey     string
@@ -22,7 +25,7 @@ type GeminiProvider struct {
 func NewGeminiProvider(apiKey string) *GeminiProvider {
 	return &GeminiProvider{
 		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: 180 * time.Second},
+		httpClient: &http.Client{Timeout: defaultTimeout},
 	}
 }
 
@@ -100,7 +103,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 		return CompletionResponse{}, fmt.Errorf("failed to marshal gemini request: %w", err)
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, p.apiKey)
+	url := fmt.Sprintf(geminiBaseURLTemplate, model, p.apiKey)
 
 	log.Printf("[gemini] sending request | model: %s | max_tokens: %d | temp: %.2f | json_mode: %t",
 		model, req.MaxTokens, req.Temperature, req.JSONMode)
