@@ -22,7 +22,6 @@ const (
 	reviewerMaxTokens  = 2048
 	defaultTemperature = 0.2
 
-	// retry configuration for LLM parse failures
 	maxParseRetries = 2
 	retryBaseDelay  = 500 * time.Millisecond
 )
@@ -104,7 +103,6 @@ func (p *Pipeline) RunForFile(
 		}
 	}
 
-	// 1. Detector
 	detected, err := p.runDetector(ctx, filePath, content, astFindings, similarFindings)
 	if err != nil {
 		log.Printf("[llm-pipeline] Detector step failed for %s: %v", filePath, err)
@@ -115,7 +113,6 @@ func (p *Pipeline) RunForFile(
 		return nil, nil
 	}
 
-	// 2. Suggester
 	suggested, err := p.runSuggester(ctx, filePath, content, detected.Candidates)
 	if err != nil {
 		log.Printf("[llm-pipeline] Suggester step failed for %s: %v", filePath, err)
@@ -126,14 +123,12 @@ func (p *Pipeline) RunForFile(
 		return nil, nil
 	}
 
-	// 3. Reviewer
 	reviewed, err := p.runReviewer(ctx, suggested.Items)
 	if err != nil {
 		log.Printf("[llm-pipeline] Reviewer step failed for %s: %v", filePath, err)
 		return nil, fmt.Errorf("reviewer failed for %s: %w", filePath, err)
 	}
 
-	// 4. Convert to EnhancedFinding, resolving DiffPos and applying decisions.
 	log.Printf("[llm-pipeline] processing reviewed items for %s | items received: %d", filePath, len(reviewed.Items))
 	results := make([]EnhancedFinding, 0, len(reviewed.Items))
 	for idx, item := range reviewed.Items {
@@ -170,7 +165,7 @@ func (p *Pipeline) RunForFile(
 		})
 	}
 
-	// 5. Embed and store each non-dropped finding for future cross-PR context.
+	// Embed and store each non-dropped finding for future cross-PR context.
 	// Errors here are non-fatal — review posting is never blocked by embedding failures.
 	if p.embeddingProvider != nil && p.store != nil {
 		for _, finding := range results {
@@ -345,10 +340,6 @@ func buildEmbeddingQueryText(filePath string, astFindings []analyzerTypes.Findin
 func cleanJSON(s string) string {
 	s = strings.TrimSpace(s)
 
-	// Only strip an outer markdown code fence – one that wraps the entire
-	// response.  We detect this by requiring the string to start with "```".
-	// Fences embedded inside JSON string values (e.g. in suggested_fix) do
-	// not start the string, so they are left untouched.
 	if strings.HasPrefix(s, "```") {
 		remainder := s[3:]
 		remainder = strings.TrimPrefix(remainder, "json")
