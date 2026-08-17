@@ -262,6 +262,9 @@ func (p *Processor) postReview(
 				msg = strings.TrimSpace(msg[endIdx+1:])
 			}
 		}
+		if f.Rule != "" {
+			msg = fmt.Sprintf("[%s] %s", f.Rule, msg)
+		}
 
 		body := fmt.Sprintf("%s\n\n*Confidence: %d%%*", msg, int(f.Confidence*100))
 		if f.SuggestedFix != "" {
