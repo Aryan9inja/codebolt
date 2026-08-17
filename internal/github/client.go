@@ -163,7 +163,7 @@ func (c *Client) PostReview(
 	reqBody := ReviewRequest{
 		CommitID: commitSHA,
 		Body:     reviewBody,
-		Event:    "COMMENT",
+		Event:    "REQUEST_CHANGES",
 		Comments: comments,
 	}
 
