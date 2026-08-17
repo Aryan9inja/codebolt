@@ -74,7 +74,6 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest
 	body := openRouterRequest{
 		Model:       model,
 		Messages:    messages,
-		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 	}
 	if req.JSONMode {
@@ -87,8 +86,8 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest
 		return CompletionResponse{}, fmt.Errorf("failed to marshal openrouter request: %w", err)
 	}
 
-	log.Printf("[openrouter] sending request to %s | model: %s | max_tokens: %d | temp: %.2f | json_mode: %t",
-		openRouterBaseURL, model, req.MaxTokens, req.Temperature, req.JSONMode)
+	log.Printf("[openrouter] sending request to %s | model: %s | temp: %.2f | json_mode: %t",
+		openRouterBaseURL, model, req.Temperature, req.JSONMode)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openRouterBaseURL, bytes.NewReader(payload))
 	if err != nil {

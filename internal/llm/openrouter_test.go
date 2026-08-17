@@ -96,7 +96,6 @@ func TestOpenRouterProvider_Complete(t *testing.T) {
 				Model:       "custom-model",
 				System:      "system prompt",
 				User:        "hello json",
-				MaxTokens:   500,
 				Temperature: 0.7,
 				JSONMode:    true,
 			},
@@ -112,9 +111,6 @@ func TestOpenRouterProvider_Complete(t *testing.T) {
 				}
 				if reqBody.Model != "custom-model" {
 					t.Errorf("expected model 'custom-model', got %q", reqBody.Model)
-				}
-				if reqBody.MaxTokens != 500 {
-					t.Errorf("expected MaxTokens 500, got %d", reqBody.MaxTokens)
 				}
 				if reqBody.Temperature != 0.7 {
 					t.Errorf("expected Temperature 0.7, got %f", reqBody.Temperature)
