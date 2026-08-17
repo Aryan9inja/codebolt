@@ -234,22 +234,38 @@ func (p *Processor) postReview(
 	var fileLevelNotes []string
 
 	for _, f := range allFindings {
+		msg := f.Message
+		if strings.HasPrefix(msg, "[") {
+			if endIdx := strings.Index(msg, "]"); endIdx != -1 {
+				msg = strings.TrimSpace(msg[endIdx+1:])
+			}
+		}
+
+		body := fmt.Sprintf("%s", msg)
+
 		if f.DiffPos > 0 {
 			comments = append(comments, github.ReviewComment{
 				Path:     f.FilePath,
 				Position: f.DiffPos,
-				Body:     fmt.Sprintf("**[%s]** %s", f.Rule, f.Message),
+				Body:     body,
 			})
 			log.Printf("[finding] %s:%d | DiffPos: %d | %s", f.FilePath, f.Line, f.DiffPos, f.Message)
 		} else {
-			fileLevelNotes = append(fileLevelNotes, f.Message)
+			fileLevelNotes = append(fileLevelNotes, body)
 		}
 	}
 
 	for _, f := range llmFindings {
-		body := fmt.Sprintf("**[%s]** %s (confidence: %.2f)", f.Rule, f.Message, f.Confidence)
+		msg := f.Message
+		if strings.HasPrefix(msg, "[") {
+			if endIdx := strings.Index(msg, "]"); endIdx != -1 {
+				msg = strings.TrimSpace(msg[endIdx+1:])
+			}
+		}
+
+		body := fmt.Sprintf("%s\n\n*Confidence: %d%%*", msg, int(f.Confidence*100))
 		if f.SuggestedFix != "" {
-			body += fmt.Sprintf("\n\nSuggested fix:\n```go\n%s\n```", f.SuggestedFix)
+			body += fmt.Sprintf("\n\n**Suggested Fix:**\n```go\n%s\n```", f.SuggestedFix)
 		}
 
 		if f.DiffPos > 0 {
