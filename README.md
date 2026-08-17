@@ -63,7 +63,7 @@ A three-agent sequential pipeline per changed file, using AST findings as _conte
 2. **Suggester** — Given the Detector's candidates, attaches an explanation and a suggested fix to each.
 3. **Reviewer** — The final quality gate. Assigns a confidence score (0.0–1.0) and a decision (`inline` / `summary` / `drop`).
 
-The two streams are **never merged mid-pipeline**. They run independently and are concatenated only at the final API call to GitHub. 
+The findings from both streams are **never merged mid-pipeline**. While the LLM uses AST results as context to avoid duplicate suggestions, it cannot alter or drop them. Both sets of findings are concatenated only at the final API call to GitHub. 
 
 ### Why Three Agents?
 A single-prompt design was explicitly considered and rejected. It would be cheaper, but it would have a higher chance of hallucinating because of context overload. The three-agent design is a deliberate tradeoff: more calls, but each call has a smaller context and a more focused task, reducing hallucination risk.
@@ -144,7 +144,7 @@ codebolt/
 
 ## Design Principles
 
-- **AST and LLM are complementary, not hierarchical.** Neither is a pre-filter or post-filter for the other; they run independently.
+- **AST and LLM outputs are complementary.** While the LLM pipeline uses AST results as context, neither acts as a gatekeeper or filter for the other's findings. Every deterministic AST finding is guaranteed to be reported.
 - **Cost control = bounded output tokens, not selective invocation.** Every changed file gets an LLM pass — no allowlists, no severity gating.
 - **Reject oversized diffs rather than silently truncate them.**
 - **Isolate before assuming.** When a model/provider misbehaves, reproduce it via direct curl to the provider first.
