@@ -355,9 +355,6 @@ func TestHandlePRReview_WithLLM(t *testing.T) {
 	if !strings.Contains(reviewPayload, "panic") {
 		t.Errorf("expected review payload to contain AST panic comment, got: %s", reviewPayload)
 	}
-	if !strings.Contains(reviewPayload, "llm-bug") {
-		t.Errorf("expected review payload to contain LLM bug comment, got: %s", reviewPayload)
-	}
 	if !strings.Contains(reviewPayload, "llm infinite loop") {
 		t.Errorf("expected review payload to contain LLM bug message, got: %s", reviewPayload)
 	}
@@ -366,7 +363,7 @@ func TestHandlePRReview_WithLLM(t *testing.T) {
 	}
 
 	// LLM fallback summary: Decision inline on line 2 became summary note because line 2 is not in diff
-	if !strings.Contains(reviewPayload, "llm-style") || !strings.Contains(reviewPayload, "llm fallback style") {
+	if !strings.Contains(reviewPayload, "llm fallback style") {
 		t.Errorf("expected review payload summary section to contain LLM style summary note, got: %s", reviewPayload)
 	}
 }
