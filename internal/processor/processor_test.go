@@ -361,7 +361,7 @@ func TestHandlePRReview_WithLLM(t *testing.T) {
 	if !strings.Contains(reviewPayload, "llm infinite loop") {
 		t.Errorf("expected review payload to contain LLM bug message, got: %s", reviewPayload)
 	}
-	if !strings.Contains(reviewPayload, "Suggested fix:\\n```go\\nfor {}") {
+	if !strings.Contains(reviewPayload, "**Suggested Fix:**\\n```go\\nfor {}") {
 		t.Errorf("expected review payload to contain suggested fix code block, got: %s", reviewPayload)
 	}
 
