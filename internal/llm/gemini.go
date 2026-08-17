@@ -90,7 +90,6 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 	}
 
 	genConfig := &geminiGenerationConfig{
-		MaxOutputTokens: req.MaxTokens,
 		Temperature:     req.Temperature,
 	}
 	if req.JSONMode {
@@ -105,8 +104,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 
 	url := fmt.Sprintf(geminiBaseURLTemplate, model, p.apiKey)
 
-	log.Printf("[gemini] sending request | model: %s | max_tokens: %d | temp: %.2f | json_mode: %t",
-		model, req.MaxTokens, req.Temperature, req.JSONMode)
+	log.Printf("[gemini] sending request | model: %s | temp: %.2f | json_mode: %t",
+		model, req.Temperature, req.JSONMode)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {

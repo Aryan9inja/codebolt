@@ -88,7 +88,6 @@ func TestGeminiProvider_Complete(t *testing.T) {
 				Model:       "gemini-custom",
 				System:      "system prompt",
 				User:        "hello json",
-				MaxTokens:   500,
 				Temperature: 0.7,
 				JSONMode:    true,
 			},
@@ -107,9 +106,6 @@ func TestGeminiProvider_Complete(t *testing.T) {
 				}
 				if reqBody.GenerationConfig == nil {
 					t.Fatal("expected generation config")
-				}
-				if reqBody.GenerationConfig.MaxOutputTokens != 500 {
-					t.Errorf("expected MaxOutputTokens 500, got %d", reqBody.GenerationConfig.MaxOutputTokens)
 				}
 				if reqBody.GenerationConfig.Temperature != 0.7 {
 					t.Errorf("expected Temperature 0.7, got %f", reqBody.GenerationConfig.Temperature)
