@@ -14,14 +14,7 @@ import (
 )
 
 const (
-	defaultMaxTokens = 1024
-	// reviewerMaxTokens is larger because the Reviewer echoes every input field
-	// (message, explanation, suggested_fix) back in its response before adding
-	// confidence and decision — free-tier models frequently hit the 1024 limit
-	// mid-JSON when those fields contain multi-line code snippets.
-	reviewerMaxTokens  = 2048
 	defaultTemperature = 0.2
-
 	maxParseRetries = 2
 	retryBaseDelay  = 500 * time.Millisecond
 )
@@ -54,7 +47,7 @@ func (p *Pipeline) CloneWithOverrides(providerName, model string) *Pipeline {
 		clone.model = model
 	}
 	if providerName != "" {
-		switch providerName {
+		switch strings.ToLower(providerName) {
 		case "gemini":
 			key := os.Getenv("GEMINI_API_KEY")
 			if key != "" {
@@ -199,7 +192,6 @@ func (p *Pipeline) runDetector(ctx context.Context, filePath, content string, as
 		Model:       p.model,
 		System:      detectorSystemPrompt,
 		User:        buildDetectorPrompt(filePath, content, astFindings, similarFindings),
-		MaxTokens:   defaultMaxTokens,
 		Temperature: defaultTemperature,
 		JSONMode:    true,
 	})
@@ -226,7 +218,6 @@ func (p *Pipeline) runSuggester(ctx context.Context, filePath, content string, c
 		Model:       p.model,
 		System:      suggesterSystemPrompt,
 		User:        buildSuggesterPrompt(filePath, content, candidates),
-		MaxTokens:   defaultMaxTokens,
 		Temperature: defaultTemperature,
 		JSONMode:    true,
 	})
@@ -271,7 +262,6 @@ func (p *Pipeline) runReviewer(ctx context.Context, items []suggesterItem) (revi
 			Model:       p.model,
 			System:      reviewerSystemPrompt,
 			User:        prompt,
-			MaxTokens:   reviewerMaxTokens,
 			Temperature: defaultTemperature,
 			JSONMode:    true,
 		})
