@@ -6,7 +6,6 @@ type CompletionRequest struct {
 	Model       string
 	System      string
 	User        string
-	MaxTokens   int
 	Temperature float64
 	JSONMode    bool // hint to the provider to constrain output to JSON
 }
